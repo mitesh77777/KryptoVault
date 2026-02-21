@@ -1,42 +1,47 @@
-/**
- * ─────────────────────────────────────────────────────────────
- * Enclave-Guard: Configuration
- * ─────────────────────────────────────────────────────────────
- */
+///////////////////////////////////////////////////////////////////////////////
+// Enclave-Guard – Configuration
+//
+// Loads environment variables and provides typed config object.
+///////////////////////////////////////////////////////////////////////////////
 
-import dotenv from "dotenv";
-dotenv.config();
+require("dotenv").config();
 
 const config = {
-  // ── AWS ───────────────────────────────────────────────────
+  // AWS
   aws: {
     region: process.env.AWS_REGION || "us-east-1",
-    kmsKeyId: process.env.KMS_KEY_ID || "alias/enclave-guard-hedera-key",
+    kmsKeyId: process.env.KMS_KEY_ID || "alias/enclave-guard-secp256k1",
   },
 
-  // ── Hedera ────────────────────────────────────────────────
+  // Hedera
   hedera: {
     network: process.env.HEDERA_NETWORK || "testnet",
-    operatorId: process.env.HEDERA_OPERATOR_ID || "",
-    operatorKey: process.env.HEDERA_OPERATOR_KEY || "",
+    operatorId: process.env.HEDERA_OPERATOR_ID,
+    operatorKey: process.env.HEDERA_OPERATOR_KEY,
+    targetAccount: process.env.HEDERA_TARGET_ACCOUNT,
+    transferAmount: parseInt(process.env.TRANSFER_AMOUNT || "100000000", 10),
   },
 
-  // ── Enclave vsock ─────────────────────────────────────────
+  // Enclave vsock
   enclave: {
     cid: parseInt(process.env.ENCLAVE_CID || "16", 10),
     port: parseInt(process.env.ENCLAVE_PORT || "5000", 10),
   },
-
-  // ── Server ────────────────────────────────────────────────
-  server: {
-    port: parseInt(process.env.PORT || "8080", 10),
-    logLevel: process.env.LOG_LEVEL || "info",
-  },
-
-  // ── HCS Audit ─────────────────────────────────────────────
-  hcs: {
-    topicId: process.env.HCS_TOPIC_ID || "",
-  },
 };
 
-export default config;
+// Validation
+function validateConfig() {
+  const required = [
+    ["HEDERA_OPERATOR_ID", config.hedera.operatorId],
+    ["HEDERA_OPERATOR_KEY", config.hedera.operatorKey],
+  ];
+
+  const missing = required.filter(([, val]) => !val);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missing.map(([k]) => k).join(", ")}`,
+    );
+  }
+}
+
+module.exports = { config, validateConfig };

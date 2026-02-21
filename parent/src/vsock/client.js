@@ -1,140 +1,116 @@
-/**
- * ─────────────────────────────────────────────────────────────
- * Enclave-Guard: vsock Client
- * ─────────────────────────────────────────────────────────────
- * Communicates with the Nitro Enclave signing service over
- * a virtual socket (AF_VSOCK). Falls back to a local stub
- * when running outside an EC2 Nitro instance (dev mode).
- * ─────────────────────────────────────────────────────────────
- */
+///////////////////////////////////////////////////////////////////////////////
+// Enclave-Guard – Vsock Client
+//
+// Communicates with the signing service running inside the Nitro Enclave
+// over a vsock (VM socket) connection.
+///////////////////////////////////////////////////////////////////////////////
 
-import net from "node:net";
-import config from "../config.js";
-import logger from "../logger.js";
+const net = require("net");
 
-/**
- * Length-prefixed message protocol:
- *   [4 bytes big-endian uint32 length][payload]
- */
-function encodeMessage(payload) {
-  const jsonBuf = Buffer.from(JSON.stringify(payload), "utf-8");
-  const header = Buffer.alloc(4);
-  header.writeUInt32BE(jsonBuf.length, 0);
-  return Buffer.concat([header, jsonBuf]);
-}
-
-function decodeMessage(buffer) {
-  if (buffer.length < 4) throw new Error("Buffer too short for header");
-  const len = buffer.readUInt32BE(0);
-  const body = buffer.slice(4, 4 + len);
-  return JSON.parse(body.toString("utf-8"));
-}
+// AF_VSOCK is not natively supported in Node.js; on EC2 with Nitro Enclaves,
+// we use the `vsock` npm package or a unix-socket shim. For portability,
+// we implement a simple TCP-based mock that can be swapped for real vsock.
 
 /**
- * Send a request to the enclave over vsock and return the response.
+ * Send a signing request to the Nitro Enclave via vsock.
  *
- * In production, this opens an AF_VSOCK connection to the enclave CID.
- * In development (no vsock support), it falls back to a simulated stub.
+ * @param {number} cid  - The enclave CID (typically 16)
+ * @param {number} port - The enclave vsock port (typically 5000)
+ * @param {object} request - The request payload
+ * @returns {Promise<object>} The response from the enclave
  */
-export async function sendToEnclave(payload) {
-  const { cid, port } = config.enclave;
-
-  logger.info(`[vsock] Sending '${payload.action}' to enclave CID=${cid}:${port}`);
-
-  try {
-    const result = await vsockRequest(cid, port, payload);
-    logger.info(`[vsock] Received response: status=${result.status}`);
-    return result;
-  } catch (err) {
-    // If vsock fails (dev mode), use the stub
-    if (err.code === "ENOENT" || err.code === "EAFNOSUPPORT" || err.message.includes("VSOCK")) {
-      logger.warn("[vsock] AF_VSOCK unavailable – using dev stub");
-      return devStub(payload);
-    }
-    throw err;
-  }
-}
-
-/**
- * Real vsock communication using Node's net module.
- * Note: AF_VSOCK (address family 40 on Linux) requires the
- * `vsock` npm package or a native binding in production.
- * We use a TCP fallback for development.
- */
-async function vsockRequest(cid, port, payload) {
+async function sendToEnclave(cid, port, request) {
   return new Promise((resolve, reject) => {
-    // In production on a Nitro instance, we would use:
-    //   const sock = new net.Socket({ fd: ... }) with AF_VSOCK
-    // For portability, we support TCP fallback on localhost:
-    const host = process.env.VSOCK_TCP_FALLBACK
-      ? "127.0.0.1"
-      : undefined;
+    // In production on a Nitro Enclave host, this uses AF_VSOCK.
+    // The vsock connection is established via /dev/vsock using the
+    // `vsock` Node.js native addon or a C++ binding.
+    //
+    // For the hackathon, we use the vsock-node helper which wraps
+    // the Linux vsock syscall.
 
-    if (host) {
-      // TCP fallback mode (development)
-      const client = net.createConnection({ host, port }, () => {
-        client.write(encodeMessage(payload));
-      });
-
-      const chunks = [];
-      client.on("data", (chunk) => chunks.push(chunk));
-      client.on("end", () => {
-        try {
-          const full = Buffer.concat(chunks);
-          resolve(decodeMessage(full));
-        } catch (e) {
-          reject(e);
-        }
-      });
-      client.on("error", reject);
-      client.setTimeout(10000, () => {
-        client.destroy(new Error("vsock request timed out"));
-      });
-    } else {
-      // This path requires vsock kernel support (Nitro instance)
-      reject(new Error("AF_VSOCK not available in this environment"));
+    let vsockConnect;
+    try {
+      // Try loading the native vsock module (available on EC2)
+      const vsock = require("vsock");
+      vsockConnect = () => vsock.connect(cid, port);
+    } catch {
+      // Fallback: use a unix socket for local development/testing
+      console.warn(
+        "[vsock] Native vsock not available, using localhost TCP fallback",
+      );
+      vsockConnect = () => net.connect({ host: "127.0.0.1", port });
     }
+
+    const conn = vsockConnect();
+    const chunks = [];
+
+    conn.on("connect", () => {
+      // Send length-prefixed JSON message (matching Python server protocol)
+      const payload = Buffer.from(JSON.stringify(request), "utf-8");
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(payload.length, 0);
+      conn.write(Buffer.concat([header, payload]));
+    });
+
+    conn.on("data", (chunk) => {
+      chunks.push(chunk);
+    });
+
+    conn.on("end", () => {
+      try {
+        const data = Buffer.concat(chunks);
+        // Skip 4-byte length header
+        const jsonBuf = data.length > 4 ? data.slice(4) : data;
+        const response = JSON.parse(jsonBuf.toString("utf-8"));
+        resolve(response);
+      } catch (err) {
+        reject(new Error(`Failed to parse enclave response: ${err.message}`));
+      }
+    });
+
+    conn.on("error", (err) => {
+      reject(new Error(`Vsock connection error: ${err.message}`));
+    });
+
+    // Timeout after 30 seconds
+    conn.setTimeout(30000, () => {
+      conn.destroy();
+      reject(new Error("Vsock connection timed out"));
+    });
   });
 }
 
 /**
- * Development stub: simulates enclave responses locally.
- * NEVER used in production – the real enclave generates
- * attestation documents and calls KMS.
+ * Request the enclave to sign a transaction hash.
+ *
+ * @param {number} cid - Enclave CID
+ * @param {number} port - Enclave port
+ * @param {Buffer} messageHash - SHA-256 hash of the transaction bytes
+ * @param {string} keyId - KMS key ID or alias
+ * @param {string} region - AWS region
+ * @returns {Promise<Buffer>} DER-encoded ECDSA signature
  */
-function devStub(payload) {
-  logger.warn("[vsock:dev] Returning simulated enclave response");
+async function requestEnclaveSign(cid, port, messageHash, keyId, region) {
+  const response = await sendToEnclave(cid, port, {
+    action: "sign",
+    key_id: keyId,
+    message: messageHash.toString("hex"),
+    region: region,
+  });
 
-  switch (payload.action) {
-    case "sign":
-      return {
-        status: "success",
-        kms_request: {
-          KeyId: payload.key_id,
-          Message: payload.message_hash,
-          MessageType: "DIGEST",
-          SigningAlgorithm: "ECDSA_SHA_256",
-        },
-        attestation_doc: Buffer.from("DEV_ATTESTATION").toString("base64"),
-        message_hash: payload.message_hash,
-      };
-
-    case "health":
-      return {
-        status: "healthy",
-        enclave: false,
-        dev_mode: true,
-      };
-
-    case "get_attestation":
-      return {
-        status: "success",
-        attestation_doc: Buffer.from("DEV_ATTESTATION").toString("base64"),
-      };
-
-    default:
-      return { status: "error", error: `Unknown action: ${payload.action}` };
+  if (response.status !== "success") {
+    throw new Error(`Enclave signing failed: ${response.error}`);
   }
+
+  return Buffer.from(response.signature, "hex");
 }
 
-export default { sendToEnclave };
+/**
+ * Health check the enclave.
+ */
+async function enclaveHealthCheck(cid, port) {
+  const response = await sendToEnclave(cid, port, { action: "health" });
+  return response;
+}
+
+module.exports = { sendToEnclave, requestEnclaveSign, enclaveHealthCheck };
