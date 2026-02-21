@@ -1,0 +1,20 @@
+# ──────────────────────────────────────────────────────────────
+# Enclave-Guard – Example tfvars
+# Copy to terraform.tfvars and fill in your values
+# ──────────────────────────────────────────────────────────────
+
+aws_region    = "us-east-1"
+project_name  = "enclave-guard"
+key_pair_name = "my-keypair"        # CHANGE: your EC2 key pair name
+
+# After first enclave build, set the PCR0 hash here:
+# enclave_pcr0 = "abc123..."
+
+# Restrict SSH to your IP for security:
+# ssh_allowed_cidr = "203.0.113.42/32"
+
+instance_type      = "m5a.xlarge"
+enclave_cpu_count  = 2
+enclave_memory_mib = 512
+
+hedera_network = "testnet"

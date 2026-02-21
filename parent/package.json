@@ -1,0 +1,30 @@
+{
+  "name": "enclave-guard-parent",
+  "version": "1.0.0",
+  "description": "Enclave-Guard: Parent application for Hedera TX signing via Nitro Enclave and KMS HSM",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "demo": "node src/demo.js",
+    "test": "node --test src/__tests__/*.test.js",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@hashgraph/sdk": "^2.51.0",
+    "@aws-sdk/client-kms": "^3.500.0",
+    "asn1js": "^3.0.5",
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT"
+}
