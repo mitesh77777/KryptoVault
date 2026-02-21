@@ -1,20 +1,25 @@
-# ──────────────────────────────────────────────────────────────
-# Enclave-Guard – Example tfvars
-# Copy to terraform.tfvars and fill in your values
-# ──────────────────────────────────────────────────────────────
+###############################################################################
+# Enclave-Guard – Example Variables
+# Copy this file to terraform.tfvars and customize as needed.
+###############################################################################
 
-aws_region    = "us-east-1"
-project_name  = "enclave-guard"
-key_pair_name = "my-keypair"        # CHANGE: your EC2 key pair name
+aws_region   = "us-east-1"
+project_name = "enclave-guard"
+environment  = "dev"
 
-# After first enclave build, set the PCR0 hash here:
-# enclave_pcr0 = "abc123..."
+# EC2 Configuration
+instance_type = "m5a.xlarge"
+# ami_id       = ""            # Leave empty for latest Amazon Linux 2023
+# key_pair_name = "my-keypair" # Your existing EC2 key pair
 
-# Restrict SSH to your IP for security:
-# ssh_allowed_cidr = "203.0.113.42/32"
+# SSH Access – RESTRICT THIS IN PRODUCTION
+allowed_ssh_cidrs = ["0.0.0.0/0"]
 
-instance_type      = "m5a.xlarge"
-enclave_cpu_count  = 2
-enclave_memory_mib = 512
+# KMS Configuration
+kms_key_alias          = "enclave-guard-secp256k1"
+kms_key_deletion_window = 7
 
-hedera_network = "testnet"
+# Enclave Attestation – UPDATE AFTER BUILDING EIF
+# Run: nitro-cli describe-eif --eif-path enclave.eif
+# Then paste the PCR0 hash here and re-apply Terraform
+enclave_pcr0_hash = "PLACEHOLDER"

@@ -1,80 +1,101 @@
-# ──────────────────────────────────────────────────────────────
-# Enclave-Guard – IAM Role & Instance Profile for Parent EC2
-# ──────────────────────────────────────────────────────────────
+###############################################################################
+# Enclave-Guard – IAM Role & Instance Profile for the Parent EC2 Instance
+#
+# The parent instance needs:
+#   - kms:Sign (but only the *enclave* can actually use it via attestation)
+#   - kms:GetPublicKey (to derive the Hedera account)
+#   - kms:DescribeKey (for key metadata)
+#   - SSM access for secure session management (no SSH keys needed)
+###############################################################################
 
-# ── Instance Role ────────────────────────────────────────────
-resource "aws_iam_role" "enclave_parent_role" {
-  name = "${var.project_name}-ec2-role"
+# ── Assume-Role Trust Policy ────────────────────────────────────────────────
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
+data "aws_iam_policy_document" "ec2_assume_role" {
+  statement {
+    sid     = "EC2AssumeRole"
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
 
-  tags = {
-    Name = "${var.project_name}-ec2-role"
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
   }
 }
 
-# ── KMS permissions for the instance role ────────────────────
-resource "aws_iam_role_policy" "kms_access" {
-  name = "${var.project_name}-kms-policy"
-  role = aws_iam_role.enclave_parent_role.id
+# ── IAM Role ────────────────────────────────────────────────────────────────
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowKMSOperations"
-        Effect = "Allow"
-        Action = [
-          "kms:Sign",
-          "kms:DescribeKey",
-          "kms:GetPublicKey"
-        ]
-        Resource = aws_kms_key.hedera_signing_key.arn
-      }
-    ]
-  })
+resource "aws_iam_role" "enclave_parent_role" {
+  name               = "${var.project_name}-parent-instance-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
+  description        = "Role for the Enclave-Guard parent EC2 instance"
+
+  tags = {
+    Name = "${var.project_name}-parent-role"
+  }
 }
 
-# ── CloudWatch Logs (audit trail) ────────────────────────────
-resource "aws_iam_role_policy" "cloudwatch_logs" {
-  name = "${var.project_name}-cw-logs-policy"
-  role = aws_iam_role.enclave_parent_role.id
+# ── KMS Signing Policy ─────────────────────────────────────────────────────
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
-      }
+data "aws_iam_policy_document" "kms_signing" {
+  statement {
+    sid    = "AllowKMSSigning"
+    effect = "Allow"
+    actions = [
+      "kms:Sign",
+      "kms:GetPublicKey",
+      "kms:DescribeKey"
     ]
-  })
+    resources = [
+      aws_kms_key.enclave_signing_key.arn
+    ]
+  }
 }
 
-# ── SSM access for management (optional but recommended) ─────
-resource "aws_iam_role_policy_attachment" "ssm_managed" {
+resource "aws_iam_role_policy" "kms_signing_policy" {
+  name   = "${var.project_name}-kms-signing"
+  role   = aws_iam_role.enclave_parent_role.id
+  policy = data.aws_iam_policy_document.kms_signing.json
+}
+
+# ── SSM Session Manager Access (secure alternative to SSH) ──────────────────
+
+resource "aws_iam_role_policy_attachment" "ssm_access" {
   role       = aws_iam_role.enclave_parent_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# ── Instance Profile ────────────────────────────────────────
+# ── CloudWatch Logging for Audit Trail ──────────────────────────────────────
+
+data "aws_iam_policy_document" "cloudwatch_logs" {
+  statement {
+    sid    = "AllowCloudWatchLogs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:DescribeLogStreams"
+    ]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/enclave-guard/*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "cloudwatch_policy" {
+  name   = "${var.project_name}-cloudwatch-logs"
+  role   = aws_iam_role.enclave_parent_role.id
+  policy = data.aws_iam_policy_document.cloudwatch_logs.json
+}
+
+# ── Instance Profile ────────────────────────────────────────────────────────
+
 resource "aws_iam_instance_profile" "enclave_parent_profile" {
-  name = "${var.project_name}-ec2-profile"
+  name = "${var.project_name}-parent-instance-profile"
   role = aws_iam_role.enclave_parent_role.name
+
+  tags = {
+    Name = "${var.project_name}-parent-profile"
+  }
 }

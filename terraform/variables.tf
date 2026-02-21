@@ -1,84 +1,102 @@
-# ──────────────────────────────────────────────────────────────
+###############################################################################
 # Enclave-Guard – Terraform Variables
-# ──────────────────────────────────────────────────────────────
+# Institutional-grade signing middleware for Hedera on AWS Nitro Enclaves
+###############################################################################
 
 variable "aws_region" {
-  description = "AWS region to deploy into"
+  description = "AWS region for all resources"
   type        = string
   default     = "us-east-1"
 }
 
 variable "project_name" {
-  description = "Project slug used for naming resources"
+  description = "Project identifier used for naming and tagging"
   type        = string
   default     = "enclave-guard"
 }
 
-variable "vpc_cidr" {
-  description = "CIDR block for the VPC"
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
   type        = string
-  default     = "10.0.0.0/16"
+  default     = "dev"
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be one of: dev, staging, prod."
+  }
 }
 
-variable "subnet_cidr" {
-  description = "CIDR block for the public subnet"
-  type        = string
-  default     = "10.0.1.0/24"
-}
+# ---------- EC2 / Enclave ----------
 
 variable "instance_type" {
-  description = "EC2 instance type (must support Nitro Enclaves)"
+  description = "EC2 instance type – must support Nitro Enclaves (m5a.xlarge minimum)"
   type        = string
   default     = "m5a.xlarge"
 }
 
 variable "ami_id" {
-  description = "Amazon Linux 2023 AMI ID (Nitro-compatible). Leave empty to auto-discover."
+  description = "Amazon Linux 2023 AMI ID (leave empty to use latest)"
   type        = string
   default     = ""
-}
-
-variable "enclave_cpu_count" {
-  description = "Number of vCPUs allocated to the Nitro Enclave"
-  type        = number
-  default     = 2
-}
-
-variable "enclave_memory_mib" {
-  description = "Memory in MiB allocated to the Nitro Enclave"
-  type        = number
-  default     = 512
-}
-
-variable "ssh_allowed_cidr" {
-  description = "CIDR block allowed to SSH into the parent instance"
-  type        = string
-  default     = "0.0.0.0/0"
 }
 
 variable "key_pair_name" {
-  description = "Name of the EC2 key pair for SSH access"
-  type        = string
-}
-
-variable "enclave_pcr0" {
-  description = "PCR0 hash of the Nitro Enclave Image. Set after first build."
+  description = "Name of an existing EC2 key pair for SSH access"
   type        = string
   default     = ""
 }
 
-variable "hedera_network" {
-  description = "Hedera network to use (testnet or mainnet)"
-  type        = string
-  default     = "testnet"
+variable "allowed_ssh_cidrs" {
+  description = "CIDR blocks allowed to SSH into the parent instance"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]  # Tighten for production
 }
 
-variable "tags" {
-  description = "Common tags applied to all resources"
-  type        = map(string)
-  default = {
-    Project     = "enclave-guard"
-    Hackathon   = "hedera-apex-2026"
-    ManagedBy   = "terraform"
+# ---------- KMS / Attestation ----------
+
+variable "enclave_pcr0_hash" {
+  description = <<-EOT
+    PCR0 measurement of the Nitro Enclave image (EIF).
+    Run `nitro-cli describe-eif --eif-path enclave.eif` to obtain this value.
+    Set to "PLACEHOLDER" during first deploy; update after building the EIF.
+  EOT
+  type        = string
+  default     = "PLACEHOLDER"
+}
+
+variable "kms_key_deletion_window" {
+  description = "Waiting period in days before KMS key deletion (7-30)"
+  type        = number
+  default     = 7
+  validation {
+    condition     = var.kms_key_deletion_window >= 7 && var.kms_key_deletion_window <= 30
+    error_message = "KMS key deletion window must be between 7 and 30 days."
   }
+}
+
+variable "kms_key_alias" {
+  description = "Alias for the signing KMS key"
+  type        = string
+  default     = "enclave-guard-secp256k1"
+}
+
+# ---------- VPC (optional – use defaults for hackathon) ----------
+
+variable "vpc_id" {
+  description = "Existing VPC ID. Leave empty to create a new one."
+  type        = string
+  default     = ""
+}
+
+variable "subnet_id" {
+  description = "Existing subnet ID. Leave empty to create a new one."
+  type        = string
+  default     = ""
+}
+
+# ---------- Tags ----------
+
+variable "tags" {
+  description = "Additional tags for all resources"
+  type        = map(string)
+  default     = {}
 }
